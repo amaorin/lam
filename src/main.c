@@ -221,7 +221,7 @@ typedef enum Node_Kind
 {
 	Node_Invalid = 0,
 
-	Node_Atom,
+	Node_Term,
 	Node_Application,
 	Node_Lambda,
 	Node_Let,
@@ -234,7 +234,7 @@ typedef struct Node
 
 	union
 	{
-		Atom atom;
+		Atom term;
 
 		struct
 		{
@@ -244,7 +244,7 @@ typedef struct Node
 
 		struct
 		{
-			Atom argument;
+			Atom arg;
 			Node* body;
 		} lambda;
 
@@ -259,46 +259,84 @@ typedef struct Node
 bool
 ParseExpression(Lexer* lexer, Node** node)
 {
-	Node** link = node;
-
-	Node* 
-
-	((x(y))(z))(\y.y(z))
-
-	smm nesting = 0;
-	while (!Lexer_IsTerminatingToken(lexer))
+	if (Lexer_IsToken(lexer, Token_CloseParen))
 	{
-		if (Lexer_EatToken(lexer, Token_CloseParen))
+		if (nesting <= 0)
 		{
-			// close paren is a terminating token when there is no paired open paren
-			if (nesting == 0) break;
-
-			nesting -= 1;
-		}
-		else if (Lexer_EatToken(lexer, Token_OpenParen))
-		{
-			nesting += 1;
-		}
-		else if (Lexer_EatToken(lexer, Token_Backslash))
-		{
-			// TODO: parse atom
-
-			if (!Lexer_EatToken(lexer, Token_Dot))
-			{
-				//// ERROR: Missing dot separating argument from body in lambda
-				return false;
-			}
-
-			//
-		}
-		else if (Lexer_IsToken(lexer, Token_Let))
-		{
-			//// ERROR: let statements cannot be used as expressions
+			//// ERROR
 			return false;
 		}
 		else
 		{
+			Lexer_NextToken(lexer);
+			nesting -= 1;
+		}
+	}
+	else if (Lexer_EatToken(lexer, Token_OpenParen))
+	{
+		nesting += 1;
+	}
+	else if (Lexer_EatToken(lexer, Token_Backslash))
+	{
+		if (!Lexer_IsToken(lexer, Token_Ident))
+		{
+			//// ERROR: Missing lambda argument name
+			return false;
+		}
 
+		Lexer_NextToken(lexer);
+
+		if (!Lexer_EatToken(lexer, Token_Dot))
+		{
+			//// ERROR: Missing dot between lambda argument name and body
+			return false;
+		}
+
+		// TODO
+		Node* lambda = malloc(sizeof(Node));
+		*lambda = (Node){
+			.kind = Node_Lambda,
+			.arg  = ,
+			.body = 0,
+		};
+
+		if (node == 0) *node = lambda;
+		else
+		{
+			Node* applicatioon = malloc(sizeof(Node));
+			application->top = *node;
+			application->bottom = 
+		}
+
+		\x.x y
+		\x.(x y)
+		(\x.x) y
+		\x.(x y)
+
+		node = &lambda->body;
+	}
+	else if (Lexer_IsToken(lexer, Token_Ident))
+	{
+		// TODO
+		Lexer_NextToken(lexer);
+
+		Node* lambda_term = malloc(sizeof(Node));
+		*lambda_term = (Node){
+			.kind = Node_Atom,
+			.term = ,
+		};
+	}
+	else
+	{
+		if (Lexer_IsToken(lexer, Token_Error))
+		{
+			//// ERROR
+			return false;
+		}
+		else
+		{
+			//// ERROR: Expected a lambda, lambda term or parentheses, not XXX
+			return false;
 		}
 	}
 }
