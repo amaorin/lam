@@ -2,6 +2,7 @@
 #include <stdio.h>
 #include <stdint.h>
 #include <stdbool.h>
+#include <string.h>
 
 typedef int8_t  s8;
 typedef int16_t s16;
@@ -443,23 +444,61 @@ PrintTerm(Term* term)
 int
 main(int argc, char** argv)
 {
-	if (argc < 2) return 1;
-
-	String input = { .data = argv[1] };
-	while (input.data[input.len] != 0) ++input.len;
-
-	Lexer lexer = Lexer_Init(input);
-
-	Term* term = 0;
-	if (!ParseExpression(&lexer, &term, false))
+	if (argc == 3 && strcmp(argv[1], "eval") == 0)
 	{
-		printf("Failed to parse expression\n");
+		String input = {0};
+		input.data = argv[2];
+		input.len  = strlen(input.data);
+
+		Lexer lexer = Lexer_Init(input);
+
+		Term* term = 0;
+		if (!ParseExpression(&lexer, &term, false))
+		{
+			return 1;
+		}
+
+		PrintTerm(term);
+		printf("\n");
+	}
+	else if (argc == 2 && strcmp(argv[1], "repl") == 0)
+	{
+		while (true)
+		{
+			printf("\n> ");
+
+			char buffer[1024];
+
+			char* in = fgets(buffer, ARRAY_LEN(buffer), stdin);
+
+			if (in == 0)
+			{
+				printf("Failed to read input. Exiting...");
+				return 1;
+			}
+
+			String input = {0};
+			input.data = buffer;
+			input.len  = strlen(buffer);
+
+			// TODO: read len error
+			
+			Lexer lexer = Lexer_Init(input);
+
+			Term* term = 0;
+			if (!ParseExpression(&lexer, &term, false))
+			{
+				continue;
+			}
+
+			PrintTerm(term);
+		}
+	}
+	else
+	{
+		printf("Invalid Arguments. Expected: lam [eval | repl]\n");
 		return 1;
 	}
-
-	PrintTermAsTree(term, 0);
-	PrintTerm(term);
-	printf("\n");
 
 	return 0;
 }
