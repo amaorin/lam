@@ -1,3 +1,4 @@
+#include <stdlib.h>
 #include <stdio.h>
 #include <stdint.h>
 #include <stdbool.h>
@@ -27,6 +28,15 @@ typedef uint64_t u64;
 #define U32_MAX ((u32)0xFFFFFFFFU)
 #define U64_MAX ((u64)0xFFFFFFFFFFFFFFFFULL)
 
+typedef s64 smm;
+typedef u64 umm;
+
+#define SMM_MIN S64_MIN
+#define SMM_MAX S64_MAX
+#define UMM_MAX U64_MAX
+
+#define ARRAY_LEN(A) (sizeof(A)/sizeof(0[A]))
+
 typedef struct String
 {
 	char* data;
@@ -34,6 +44,19 @@ typedef struct String
 } String;
 
 #define STRING(S) (String){ .data = (char*)(S), .len = sizeof(S)-1 }
+
+bool
+String_Equals(String a, String b)
+{
+	if (a.len != b.len) return false;
+
+	for (umm i = 0; i < a.len; ++i)
+	{
+		if (a.data[i] != b.data[i]) return false;
+	}
+
+	return true;
+}
 
 bool
 IsWhitespace(char c)
@@ -121,7 +144,7 @@ Lexer_IsToken(Lexer* lexer, Token_Kind kind)
 bool
 Lexer_IsTerminatingToken(Lexer* lexer)
 {
-	return (lexer->curent_token.kind < Token__PastLastTerminatingToken);
+	return (lexer->current_token.kind < Token__PastLastTerminatingToken);
 }
 
 bool
@@ -139,8 +162,8 @@ Lexer_EatToken(Lexer* lexer, Token_Kind kind)
 Token
 Lexer_NextToken(Lexer* lexer)
 {
-	// keep returning Invalid or EOF when hit
-	if (lexer->current_token.kind < Token__PastLastTerminatingToken)
+	// keep returning Invalid or EOF when hit after the first token has been consumed
+	if (lexer->cursor > 0 && lexer->current_token.kind < Token__PastLastTerminatingToken)
 	{
 		return lexer->current_token;
 	}
@@ -160,7 +183,7 @@ Lexer_NextToken(Lexer* lexer)
 	}
 	else if (IsAlpha(input.data[lexer->cursor]))
 	{
-		String identifier = { .data = input.data + lexer->cursor, .len = 0 };
+		String identifier = { .data = input.data + lexer->cursor };
 
 		++lexer->cursor;
 
@@ -168,6 +191,8 @@ Lexer_NextToken(Lexer* lexer)
 		{
 			++lexer->cursor;
 		}
+
+		identifier.len = (lexer->cursor + input.data) - identifier.data;
 
 		if   (String_Equals(identifier, STRING("let"))) lexer->current_token.kind = Token_Let;
 		else                                            lexer->current_token.kind = Token_Ident;
@@ -195,14 +220,16 @@ Lexer_NextToken(Lexer* lexer)
 				}
 				else
 				{
-					//// ERROR: Invalid token, : must be directly followed by =
+					//// ERROR
+					printf("ERROR: Invalid token, : must be directly followed by =\n");
 					lexer->current_token.kind = Token_Invalid;
 				}
 			} break;
 
 			default:
 			{
-				//// ERROR: Invalid token
+				//// ERROR
+				printf("ERROR: Invalid token \"%c\"\n", c);
 				lexer->current_token.kind = Token_Invalid;
 			} break;
 		}
@@ -211,132 +238,204 @@ Lexer_NextToken(Lexer* lexer)
 	return lexer->current_token;
 }
 
-typedef struct Atom
+typedef enum Term_Kind
 {
-	// TODO
-	String s;
-} Atom;
+	Term_Invalid = 0,
 
-typedef enum Node_Kind
+	Term_Variable,
+	Term_Abstraction,
+	Term_Application,
+} Term_Kind;
+
+typedef struct Term
 {
-	Node_Invalid = 0,
-
-	Node_Term,
-	Node_Application,
-	Node_Lambda,
-	Node_Let,
-} Node_Kind;
-
-typedef struct Node Node;
-typedef struct Node
-{
-	Node_Kind kind;
+	Term_Kind kind;
 
 	union
 	{
-		Atom term;
+		String variable;
 
 		struct
 		{
-			Node* top; /*wink*/
-			Node* bottom;
+			String variable;
+			struct Term* body;
+		} abstraction;
+
+		struct
+		{
+			struct Term* top; /* wink */
+			struct Term* bottom;
 		} application;
-
-		struct
-		{
-			Atom arg;
-			Node* body;
-		} lambda;
-
-		struct
-		{
-			Atom name;
-			Node* body;
-		} let;
 	};
-} Node;
+} Term;
 
 bool
-ParseExpression(Lexer* lexer, Node** node)
+ParseExpression(Lexer* lexer, Term** term, bool precedence)
 {
-	if (Lexer_IsToken(lexer, Token_CloseParen))
-	{
-		if (nesting <= 0)
-		{
-			//// ERROR
-			return false;
-		}
-		else
-		{
-			Lexer_NextToken(lexer);
-			nesting -= 1;
-		}
-	}
-	else if (Lexer_EatToken(lexer, Token_OpenParen))
-	{
-		nesting += 1;
-	}
-	else if (Lexer_EatToken(lexer, Token_Backslash))
+	if (Lexer_EatToken(lexer, Token_Backslash))
 	{
 		if (!Lexer_IsToken(lexer, Token_Ident))
 		{
-			//// ERROR: Missing lambda argument name
+			//// ERROR
+			printf("ERROR: Expected variable name after \\ in abstraction\n");
 			return false;
 		}
 
+		String variable = Lexer_GetToken(lexer).ident;
 		Lexer_NextToken(lexer);
 
 		if (!Lexer_EatToken(lexer, Token_Dot))
 		{
-			//// ERROR: Missing dot between lambda argument name and body
+			//// ERROR
+			printf("ERROR: Missing dot between variable and body in abstraction\n");
 			return false;
 		}
 
-		// TODO
-		Node* lambda = malloc(sizeof(Node));
-		*lambda = (Node){
-			.kind = Node_Lambda,
-			.arg  = ,
-			.body = 0,
+		Term* body = 0;
+		if (!ParseExpression(lexer, &body, true)) return false;
+
+		*term = malloc(sizeof(Term));
+		**term = (Term){
+			.kind        = Term_Abstraction,
+			.abstraction = {
+				.variable = variable,
+				.body     = body,
+			},
 		};
+	}
+	else if (Lexer_EatToken(lexer, Token_OpenParen))
+	{
+		if (!ParseExpression(lexer, term, false)) return false;
 
-		if (node == 0) *node = lambda;
-		else
+		if (!Lexer_EatToken(lexer, Token_CloseParen))
 		{
-			Node* applicatioon = malloc(sizeof(Node));
-			application->top = *node;
-			application->bottom = 
+			//// ERROR
+			printf("ERROR: Missing matching closing parenthesis\n");
+			return false;
 		}
-
-		\x.x y
-		\x.(x y)
-		(\x.x) y
-		\x.(x y)
-
-		node = &lambda->body;
 	}
 	else if (Lexer_IsToken(lexer, Token_Ident))
 	{
-		// TODO
+		String variable = Lexer_GetToken(lexer).ident;
 		Lexer_NextToken(lexer);
 
-		Node* lambda_term = malloc(sizeof(Node));
-		*lambda_term = (Node){
-			.kind = Node_Atom,
-			.term = ,
+		*term = malloc(sizeof(Term));
+		**term = (Term){
+			.kind     = Term_Variable,
+			.variable = variable,
 		};
 	}
 	else
 	{
-		if (Lexer_IsToken(lexer, Token_Error))
+		if (Lexer_IsToken(lexer, Token_Invalid))
 		{
 			//// ERROR
+			printf("ERROR: Lexer error\n");
 			return false;
 		}
 		else
 		{
-			//// ERROR: Expected a lambda, lambda term or parentheses, not XXX
+			//// ERROR
+			printf("ERROR: Unexpected token\n");
 			return false;
+		}
+	}
+
+	bool is_end = (Lexer_IsTerminatingToken(lexer) || Lexer_IsToken(lexer, Token_CloseParen));
+	if (!precedence && !is_end)
+	{
+		Term* top    = *term;
+		Term* bottom = 0;
+
+		if (!ParseExpression(lexer, &bottom, false)) return false;
+
+		*term = malloc(sizeof(Term));
+		**term = (Term){
+			.kind        = Term_Application,
+			.application = {
+				.top    = top,
+				.bottom = bottom,
+			},
+		};
+	}
+
+	return true;
+}
+
+void
+PrintIndent(umm level)
+{
+	for (umm i = 0; i < level; ++i)
+	{
+		printf("  ");
+	}
+}
+
+void
+PrintTermAsTree(Term* term, umm level)
+{
+	PrintIndent(level);
+
+	if (term->kind == Term_Variable)
+	{
+		printf("Term_Variable(%.*s)\n", (int)term->variable.len, term->variable.data);
+	}
+	else if (term->kind == Term_Abstraction)
+	{
+		printf("Term_Abstraction(%.*s)\n", (int)term->abstraction.variable.len, term->abstraction.variable.data);
+
+		PrintIndent(level);
+		printf("body:\n");
+		PrintTermAsTree(term->abstraction.body, level + 1);
+	}
+	else if (term->kind == Term_Application)
+	{
+		printf("Term_Application\n");
+
+		PrintIndent(level);
+		printf("top:\n");
+		PrintTermAsTree(term->application.top, level + 1);
+
+		PrintIndent(level);
+		printf("bottom:\n");
+		PrintTermAsTree(term->application.bottom, level + 1);
+	}
+	else
+	{
+		printf("ERROR\n");
+	}
+}
+
+void
+PrintTerm(Term* term)
+{
+	if (term->kind == Term_Variable)
+	{
+		printf("%.*s", (int)term->variable.len, term->variable.data);
+	}
+	else if (term->kind == Term_Abstraction)
+	{
+		printf("\\%.*s.", (int)term->abstraction.variable.len, term->abstraction.variable.data);
+
+		bool should_paren = (term->abstraction.body->kind == Term_Application);
+
+		if (should_paren) printf("(");
+		PrintTerm(term->abstraction.body);
+		if (should_paren) printf(")");
+	}
+	else if (term->kind == Term_Application)
+	{
+		Term* part[2] = { term->application.top, term->application.bottom };
+
+		for (umm i = 0; i < ARRAY_LEN(part); ++i)
+		{
+			bool should_paren = (part[i]->kind != Term_Variable);
+
+			if (should_paren) printf("(");
+			PrintTerm(part[i]);
+			if (should_paren) printf(")");
+
+			if (i < ARRAY_LEN(part)-1) printf(" ");
 		}
 	}
 }
@@ -344,5 +443,23 @@ ParseExpression(Lexer* lexer, Node** node)
 int
 main(int argc, char** argv)
 {
+	if (argc < 2) return 1;
+
+	String input = { .data = argv[1] };
+	while (input.data[input.len] != 0) ++input.len;
+
+	Lexer lexer = Lexer_Init(input);
+
+	Term* term = 0;
+	if (!ParseExpression(&lexer, &term, false))
+	{
+		printf("Failed to parse expression\n");
+		return 1;
+	}
+
+	PrintTermAsTree(term, 0);
+	PrintTerm(term);
+	printf("\n");
+
 	return 0;
 }
