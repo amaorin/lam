@@ -363,49 +363,42 @@ ParseExpression(Lexer* lexer, Term** term, bool precedence)
 	return true;
 }
 
-void
-PrintIndent(umm level)
-{
-	for (umm i = 0; i < level; ++i)
-	{
-		printf("  ");
-	}
-}
-
-void
-PrintTermAsTree(Term* term, umm level)
-{
-	PrintIndent(level);
-
-	if (term->kind == Term_Variable)
-	{
-		printf("Term_Variable(%.*s)\n", (int)term->variable.len, term->variable.data);
-	}
-	else if (term->kind == Term_Abstraction)
-	{
-		printf("Term_Abstraction(%.*s)\n", (int)term->abstraction.variable.len, term->abstraction.variable.data);
-
-		PrintIndent(level);
-		printf("body:\n");
-		PrintTermAsTree(term->abstraction.body, level + 1);
-	}
-	else if (term->kind == Term_Application)
-	{
-		printf("Term_Application\n");
-
-		PrintIndent(level);
-		printf("top:\n");
-		PrintTermAsTree(term->application.top, level + 1);
-
-		PrintIndent(level);
-		printf("bottom:\n");
-		PrintTermAsTree(term->application.bottom, level + 1);
-	}
-	else
-	{
-		printf("ERROR\n");
-	}
-}
+// from: en.wikipedia.org/wiki/Lambda_calculus
+//
+// --- free variables
+// given a term M, the free variables FV(M)
+// are the variables not bound by an abstraction
+// it defined by case
+// FV(x)    = {x}
+// FV(x y)  = FV(x) union FV(y)
+// FV(\x.y) = FV(y) minus {x}
+//
+// --- capture avoiding substitution
+// x[x := N] = N
+// y[x := N] = y if y != x
+// (x y)[z := N] = x[z := N] y[z := N]
+// (\x.y)[z := N] =
+// if x = z          : \x.y (stop at and do not change captured variables)
+// if x not in FV(N) : \x.(y[z := N])
+// if x in FV(N)     : (\x'.(y[x := x']))[z := N] where x' not in FV(y) union FV(N)
+//
+// --- alpha conversion
+// given a term M, where y not in FV(M)
+// \x.M is equivalent to \y.M [y := x]
+// i.e. the name doesn't matter, only the connections
+//
+// --- beta reduction
+// (\x.t) s reduces to t[x := s] 
+//
+// --- eta conversion
+// \x.(f x) reduces to f when x not in FV(f)
+//
+// ---
+// I feel like most of the complexity lies in naming the variables and just tracking them
+// as interconnected nodes would remove all of that complexity.
+// Since capture avoiding substitution can't change a captured variable, then just renaming
+// everything... ah, but the renaming still happens, since evaluation is basically just
+// removing the shell and renaming the innards.
 
 void
 PrintTerm(Term* term)
