@@ -1,5 +1,6 @@
 from enum import Enum
 from typing import Any
+import copy
 
 class Token_Kind(Enum):
     Invalid = 0
@@ -113,71 +114,63 @@ class Application:
         b = str(self.bottom) if type(self.bottom) is Variable else f"({self.bottom})"
         return a + " " + b
 
+def _ParseExpression(lexer: Lexer) -> tuple[bool, Any]:
+    result = None
+    while True:
+        expr = None
 
-def ParseInnerExpression(lexer: Lexer) -> tuple[bool, Any]:
-    if lexer.EatToken(Token_Kind.Backslash):
-        if not lexer.IsToken(Token_Kind.Ident):
+        if lexer.EatToken(Token_Kind.Backslash):
+            if not lexer.IsToken(Token_Kind.Ident):
+                # ERROR
+                return False, None
+
+            variable = lexer.current_token.ident
+            lexer.NextToken()
+
+            if not lexer.EatToken(Token_Kind.Dot):
+                # ERROR
+                return False, None
+
+            ok, body = _ParseExpression(lexer)
+            if not ok:
+                return False, None
+
+            expr = Abstraction(variable, body)
+
+        elif lexer.EatToken(Token_Kind.OpenParen):
+            ok, inner_expr = _ParseExpression(lexer)
+            if not ok:
+                return False, None
+
+            if not lexer.EatToken(Token_Kind.CloseParen):
+                # ERROR
+                return False, None
+
+            expr = inner_expr
+
+        elif lexer.IsToken(Token_Kind.Ident):
+            ident = lexer.current_token.ident
+            lexer.NextToken()
+
+            expr = Variable(ident)
+
+        else:
             # ERROR
             return False, None
 
-        ident = lexer.current_token.ident
-        lexer.NextToken()
+        if result is None:
+            result = expr
+        else:
+            top    = result
+            bottom = expr
 
-        if not lexer.EatToken(Token_Kind.Dot):
-            # ERROR
-            return False, None
+            result = Application(top, bottom)
 
-        ok, body = ParseInnerExpression(lexer)
-        if not ok:
-            # ERROR
-            return False, None
-
-        return True, Abstraction(ident, body)
-
-    elif lexer.EatToken(Token_Kind.OpenParen):
-        
-        ok, expr = ParseOuterExpression(lexer)
-        if not ok:
-            # ERROR
-            return False, None
-
-        if not lexer.EatToken(Token_Kind.CloseParen):
-            # ERROR
-            return False, None
-
-        return True, expr
-
-    elif lexer.IsToken(Token_Kind.Ident):
-        ident = lexer.current_token.ident
-        lexer.NextToken()
-
-        return True, Variable(ident)
-
-    else:
-        # ERROR
-        return False, None
-
-def ParseOuterExpression(lexer: Lexer) -> tuple[bool, Any]:
-    ok, expr = ParseInnerExpression(lexer)
-    if not ok:
-        # ERROR
-        return False, None
-
-    if not (lexer.IsToken(Token_Kind.EOF) or lexer.IsToken(Token_Kind.CloseParen)):
-        top = expr
-        nok, bottom = ParseOuterExpression(lexer)
-
-        if not nok:
-            # ERROR
-            return False, None
-
-        expr = Application(top, bottom)
-
-    return True, expr
+        if lexer.IsToken(Token_Kind.CloseParen) or lexer.IsToken(Token_Kind.EOF):
+            return True, result
 
 def ParseExpression(lexer: Lexer) -> tuple[bool, Any]:
-    ok, expr = ParseOuterExpression(lexer)
-
+    ok, expr = _ParseExpression(lexer)
     if not ok:
         # ERROR
         return False, None
@@ -188,6 +181,12 @@ def ParseExpression(lexer: Lexer) -> tuple[bool, Any]:
 
     return True, expr
 
+def L(inp: str) -> Any:
+    ok, expr = ParseExpression(Lexer(inp))
+    assert ok
+
+    return expr
+
 def FreeVars(term: Any) -> set[str]:
     if type(term) is Variable:
         return { term.ident }
@@ -197,8 +196,7 @@ def FreeVars(term: Any) -> set[str]:
         assert type(term) is Abstraction
         return FreeVars(term.body) - { term.variable }
 
-# TODO: consider deep copy
-def CaptureAvoidingSubst(term: Any, var: str, subst: Any) -> Any:
+def Subst(term: Any, var: str, subst: Any) -> Any:
     if type(term) is Variable:
         if term.ident == var:
             return subst
@@ -206,9 +204,9 @@ def CaptureAvoidingSubst(term: Any, var: str, subst: Any) -> Any:
             return term
 
     elif type(term) is Application:
-        term.top    = CaptureAvoidingSubst(term.top, var, subst)
-        term.bottom = CaptureAvoidingSubst(term.bottom, var, subst)
-
+        term = copy.deepcopy(term)
+        term.top    = Subst(term.top, var, subst)
+        term.bottom = Subst(term.bottom, var, subst)
         return term
 
     else:
@@ -218,83 +216,65 @@ def CaptureAvoidingSubst(term: Any, var: str, subst: Any) -> Any:
             return term
 
         elif term.variable not in FreeVars(subst):
-            term.body = CaptureAvoidingSubst(term.body, var, subst)
+            term = copy.deepcopy(term)
+            term.body = Subst(term.body, var, subst)
             return term
 
         else:
-            original_var = term.variable
-            rename_var = original_var + "'"
+            term = copy.deepcopy(term)
+            old_name = term.variable
+            new_name = old_name + "'"
 
-            term.variable = rename_var
-            term.body = CaptureAvoidingSubst(term.body, original_var, Variable(rename_var))
-            term.body = CaptureAvoidingSubst(term.body, var, subst)
+            term.variable = new_name
+            term.body     = Subst(term.body, old_name, Variable(new_name))
+
+            term.body = Subst(term.body, var, subst)
 
             return term
 
-def BetaReduction(term: Any) -> tuple[bool, Any]:
-    if (type(term) is Application
-        and type(term.top) is Abstraction):
-
-        return True, CaptureAvoidingSubst(term.top.body, term.top.variable, term.bottom)
-
-    else:
-        return False, term
-
-def EtaConversion(term: Any) -> tuple[bool, Any]:
-    if (type(term) is Abstraction
-        and type(term.body) is Application
-        and type(term.body.bottom) is Variable
-        and term.body.bottom.ident == term.variable
-        and term.body.bottom.ident not in FreeVars(term.body.top)):
-        
-        return True, term.body.top
-
-    else:
-        return False, term
-
-def BetaNormalForm(term: Any):
+def Reduce(term: Any) -> Any:
     if type(term) is Variable:
         return term
 
     elif type(term) is Application:
-        term.top    = BetaNormalForm(term.top)
-        term.bottom = BetaNormalForm(term.bottom)
+        if type(term.top) is Abstraction:
+            term = Subst(term.top.body, term.top.variable, term.bottom)
+            return Reduce(term)
 
-        progress, term = BetaReduction(term)
+        else:
+            term = copy.deepcopy(term)
+            term.top    = Reduce(term.top)
+            term.bottom = Reduce(term.bottom)
 
-        if progress:
-            print("beta", term)
-            term = BetaNormalForm(term)
-
-        return term
+            return term
 
     else:
         assert type(term) is Abstraction
         
-        term.body = BetaNormalForm(term.body)
-
-        progress, term = EtaConversion(term)
-
-        if progress:
-            print("eta", term)
+        term = copy.deepcopy(term)
+        term.body = Reduce(term.body)
 
         return term
+#t = L(r"x (y ((\a.a) b)) ((\c.c) d)")
+#print(t, Reduce(t), sep="\n")
 
-def L(inp: str):
-    lexer = Lexer(inp)
-    ok, expr = ParseExpression(lexer)
-    assert ok
-
-    return expr
-
-#print(BetaNormalForm(L(r"\z.(\x.(x x) y)")))
-
-TRUE  = L(r"\x.\y.x")
-FALSE = L(r"\x.\y.y")
-AND   = L(r"\p.\q.(p q p)")
-
-t = L(f"{AND} {TRUE} {FALSE}")
+omega = L(r"(\x.x x) (\x.x x)")
+t = L(r"(\a. \y. y (a (\x.x x) (\x.x x)) ((\x.\y. x y) y) ((\x.\x. x) a) (\z. (\q. q) z)) ((\p. p) (\u.\v. v))")
+b = L(r"\y. y (\v. v) (\y1. y y1) (\x. x) (\z. z)")
 
 print(t)
+for i in range(4):
+    t = Reduce(t)
+    print(t)
 
-print(BetaNormalForm(t))
+print(b)
+
+"""
+    if type(term) is Variable:
+        pass
+    elif type(term) is Application:
+        pass
+    else:
+        assert type(term) is Abstraction
+        pass
+"""
